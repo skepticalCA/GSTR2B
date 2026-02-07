@@ -143,6 +143,11 @@ def run_8_layer_reconciliation(cis_df, gstr2b_df, col_map_cis, col_map_g2b, tol_
     cis_proc = cis_df.copy()
     g2b_proc = gstr2b_df.copy()
 
+    # Drop temp columns if they exist (SAFETY FIX)
+    temp_cols = ['Norm_GSTIN', 'Norm_PAN', 'Inv_Basic', 'Inv_Num', 'Inv_Last4', 'Taxable', 'Tax', 'Grand_Total']
+    cis_proc.drop(columns=[c for c in temp_cols if c in cis_proc.columns], inplace=True)
+    g2b_proc.drop(columns=[c for c in temp_cols if c in g2b_proc.columns], inplace=True)
+
     # IDs
     if 'Index CIS' not in cis_proc.columns: cis_proc['Index CIS'] = range(1, len(cis_proc) + 1)
     if 'INDEX' not in g2b_proc.columns: g2b_proc['INDEX'] = g2b_proc.index + 100000 
