@@ -3,14 +3,12 @@ import pandas as pd
 import io
 import re
 import numpy as np
+import difflib # For Layer 7 Fuzzy Matching
 
 # ==========================================
 # 1. ROBUST DATA LOADER (Header Stitching)
 # ==========================================
 def load_gstr2b_with_stitching(file_obj, sheet_name):
-    """
-    Reads first 8 rows to find headers. Stitches split headers if found.
-    """
     try:
         df_raw = pd.read_excel(file_obj, sheet_name=sheet_name, header=None, nrows=8)
     except:
@@ -90,6 +88,13 @@ def normalize_gstin(gstin):
     if pd.isna(gstin): return ""
     return str(gstin).strip().upper().replace(" ", "")
 
+def get_pan_from_gstin(gstin):
+    """Extracts first 10 chars (PAN) from GSTIN"""
+    norm = normalize_gstin(gstin)
+    if len(norm) >= 10:
+        return norm[:10]
+    return norm
+
 # --- NORMALIZERS ---
 def normalize_inv_basic(inv):
     if pd.isna(inv): return ""
@@ -113,10 +118,14 @@ def get_last_4(inv):
     if len(s) > 4: return s[-4:]
     return s.lstrip('0')
 
+def get_similarity_ratio(str1, str2):
+    """Calculates Levenshtein similarity ratio (0.0 to 1.0)"""
+    return difflib.SequenceMatcher(None, str(str1), str(str2)).ratio()
+
 # ==========================================
-# 3. CORE LOGIC (5-LAYER + DETAILED REMARKS)
+# 3. CORE LOGIC (8 LAYERS)
 # ==========================================
-def run_5_layer_reconciliation(cis_df, gstr2b_df, col_map_cis, col_map_g2b, tol_std, tol_high):
+def run_8_layer_reconciliation(cis_df, gstr2b_df, col_map_cis, col_map_g2b, tol_std, tol_high):
     
     # --- A. PREPROCESSING ---
     cis_proc = cis_df.copy()
@@ -128,8 +137,12 @@ def run_5_layer_reconciliation(cis_df, gstr2b_df, col_map_cis, col_map_g2b, tol_
 
     # Key Normalization
     cis_proc['Norm_GSTIN'] = cis_proc[col_map_cis['GSTIN']].apply(normalize_gstin)
+    cis_proc['Norm_PAN'] = cis_proc[col_map_cis['GSTIN']].apply(get_pan_from_gstin)
+    
     g2b_proc['Norm_GSTIN'] = g2b_proc[col_map_g2b['GSTIN']].apply(normalize_gstin)
+    g2b_proc['Norm_PAN'] = g2b_proc[col_map_g2b['GSTIN']].apply(get_pan_from_gstin)
 
+    # Invoice Normalization
     cis_proc['Inv_Basic'] = cis_proc[col_map_cis['INVOICE']].apply(normalize_inv_basic)
     cis_proc['Inv_Num'] = cis_proc[col_map_cis['INVOICE']].apply(normalize_inv_numeric)
     cis_proc['Inv_Last4'] = cis_proc[col_map_cis['INVOICE']].apply(get_last_4)
@@ -160,135 +173,202 @@ def run_5_layer_reconciliation(cis_df, gstr2b_df, col_map_cis, col_map_g2b, tol_
     g2b_proc['Matching Status'] = "Unmatched"
     g2b_proc['CIS Key'] = ""
 
-    # --- B. GROUPING ---
-    cis_grouped = cis_proc.groupby(['Norm_GSTIN', 'Inv_Basic']).agg({
-        'Taxable': 'sum',
-        'Tax': 'sum',
-        'Grand_Total': 'sum',
-        'Inv_Num': 'first', 
-        'Inv_Last4': 'first',
-        col_map_cis['INVOICE']: 'first', # Original Invoice String
-        col_map_cis['DATE']: 'first',
+    # --- B. INITIAL GROUPING (CIS) ---
+    cis_grouped = cis_proc.groupby(['Norm_GSTIN', 'Norm_PAN', 'Inv_Basic']).agg({
+        'Taxable': 'sum', 'Tax': 'sum', 'Grand_Total': 'sum',
+        'Inv_Num': 'first', 'Inv_Last4': 'first',
+        col_map_cis['INVOICE']: 'first', col_map_cis['DATE']: 'first',
         'Index CIS': list
     }).reset_index()
-    
     cis_grouped['Matched_Flag'] = False
 
     match_stats = {}
 
-    # --- C. MATCHING ENGINE ---
-    def run_layer(layer_name, join_col_cis, join_col_g2b, tolerance, strict_tax_split=False):
+    # Helper to commit matches
+    def commit_match(layer_name, row_cis, row_g2b, diff_grand, detail_str, is_reverse_club=False, g2b_indices_list=None):
+        # Update CIS Group
+        if not is_reverse_club:
+            # Standard path
+            idx = row_cis.name
+            cis_grouped.at[idx, 'Matched_Flag'] = True
+            cis_indices = row_cis['Index CIS']
+            g2b_indices = [row_g2b['INDEX']]
+        else:
+            # Reverse clubbing path: row_cis is a Grouped Row, row_g2b is a Grouped Row
+            cis_indices = row_cis['Index CIS']
+            g2b_indices = g2b_indices_list
+            # We don't update cis_grouped here because reverse clubbing loop handles it differently
+
+        # Update GSTR-2B
+        for g_idx in g2b_indices:
+            g2b_proc.loc[g2b_proc['INDEX'] == g_idx, 'Matching Status'] = "Matched"
+            g2b_proc.loc[g2b_proc['INDEX'] == g_idx, 'CIS Key'] = ", ".join(map(str, cis_indices))
+
+        # Update CIS Lines
+        for cis_id in cis_indices:
+            cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Matching Status'] = "Matched"
+            cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Match Category'] = layer_name
+            cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'GSTR 2B Key'] = ", ".join(map(str, g2b_indices))
+            cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Short Remark'] = "Matched"
+            cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Detailed Remark'] = detail_str
+            
+            existing = str(cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Comments&Remarks'].values[0])
+            if existing == 'nan': existing = ""
+            new_rem = f"{existing} | {layer_name}".strip(" |")
+            cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Comments&Remarks'] = new_rem
+
+    # --- LAYERS 1-5 (STANDARD) ---
+    def run_standard_layer(layer_name, join_col_cis, join_col_g2b, tolerance, strict_tax_split=False, use_pan=False):
         count = 0
         for idx, row_cis in cis_grouped.iterrows():
             if row_cis['Matched_Flag']: continue
             
             gstin = row_cis['Norm_GSTIN']
+            pan = row_cis['Norm_PAN']
             inv_val = row_cis[join_col_cis]
             
             if not inv_val or len(str(inv_val)) < 2: continue
 
-            candidates = g2b_proc[
-                (g2b_proc['Matching Status'] == "Unmatched") &
-                (g2b_proc['Norm_GSTIN'] == gstin) &
-                (g2b_proc[join_col_g2b] == inv_val)
-            ]
+            # Filter G2B
+            mask = (g2b_proc['Matching Status'] == "Unmatched") & (g2b_proc[join_col_g2b] == inv_val)
+            if use_pan:
+                mask = mask & (g2b_proc['Norm_PAN'] == pan) # Relaxed: Same PAN, diff GSTIN
+            else:
+                mask = mask & (g2b_proc['Norm_GSTIN'] == gstin) # Strict: Same GSTIN
+            
+            candidates = g2b_proc[mask]
 
             if candidates.empty: continue
 
             for g2b_idx, row_g2b in candidates.iterrows():
-                # --- COMPARISON ---
                 diff_grand = abs(row_cis['Grand_Total'] - row_g2b['Grand_Total'])
-                diff_taxable = abs(row_cis['Taxable'] - row_g2b['Taxable'])
-                diff_tax = abs(row_cis['Tax'] - row_g2b['Tax'])
-                
                 is_match = False
                 
-                if strict_tax_split: # Layer 1
-                    if diff_taxable <= tolerance and diff_tax <= tolerance:
-                        is_match = True
-                else: # Layers 2-5
-                    if diff_grand <= tolerance:
-                        is_match = True
+                if strict_tax_split:
+                    diff_taxable = abs(row_cis['Taxable'] - row_g2b['Taxable'])
+                    diff_tax = abs(row_cis['Tax'] - row_g2b['Tax'])
+                    if diff_taxable <= tolerance and diff_tax <= tolerance: is_match = True
+                else:
+                    if diff_grand <= tolerance: is_match = True
 
                 if is_match:
-                    # --- GENERATE DETAILED REMARK ---
-                    matched_parts = ["GSTIN"]
-                    
-                    # Invoice Part
-                    if join_col_cis == "Inv_Basic":
-                        matched_parts.append("Invoice Number")
-                    elif join_col_cis == "Inv_Num":
-                        matched_parts.append(f"Numeric Invoice ({row_cis[col_map_cis['INVOICE']]} vs {row_g2b[col_map_g2b['INVOICE']]})")
-                    elif join_col_cis == "Inv_Last4":
-                        matched_parts.append(f"Last 4 Digits ({row_cis[col_map_cis['INVOICE']]} vs {row_g2b[col_map_g2b['INVOICE']]})")
-
-                    # Financial Part
-                    mismatched_parts = []
-                    
-                    if diff_taxable <= tolerance and diff_tax <= tolerance:
-                        matched_parts.append("Taxable Value")
-                        matched_parts.append("Tax Amount")
-                    else:
-                        # Partial match case (Matched Grand Total but split is off)
-                        matched_parts.append(f"Grand Total (Diff: {diff_grand:.2f})")
-                        mismatched_parts.append(f"Taxable Diff: {diff_taxable:.2f}")
-                        mismatched_parts.append(f"Tax Diff: {diff_tax:.2f}")
-
-                    # Date Part
-                    cis_date = pd.to_datetime(row_cis[col_map_cis['DATE']], dayfirst=True, errors='coerce')
-                    g2b_date = pd.to_datetime(row_g2b[col_map_g2b['DATE']], dayfirst=True, errors='coerce')
-                    
-                    if pd.notna(cis_date) and pd.notna(g2b_date):
-                        if cis_date == g2b_date:
-                            matched_parts.append("Date")
-                        else:
-                            mismatched_parts.append(f"Date Diff ({cis_date.strftime('%d-%m')} vs {g2b_date.strftime('%d-%m')})")
-
-                    # Final String
-                    remark_str = "Matched: " + ", ".join(matched_parts)
-                    if mismatched_parts:
-                        remark_str += " | Mismatch: " + ", ".join(mismatched_parts)
-
-                    # --- UPDATE ---
-                    cis_grouped.at[idx, 'Matched_Flag'] = True
-                    g2b_real_idx = row_g2b['INDEX']
-                    
-                    g2b_proc.loc[g2b_proc['INDEX'] == g2b_real_idx, 'Matching Status'] = "Matched"
-                    g2b_proc.loc[g2b_proc['INDEX'] == g2b_real_idx, 'CIS Key'] = ", ".join(map(str, row_cis['Index CIS']))
-                    
-                    for cis_id in row_cis['Index CIS']:
-                        cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Matching Status'] = "Matched"
-                        cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Match Category'] = layer_name
-                        cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'GSTR 2B Key'] = g2b_real_idx
-                        cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Short Remark'] = "Matched"
-                        cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Detailed Remark'] = remark_str
+                    detail = f"{layer_name} (Diff: {diff_grand:.2f})"
+                    if use_pan and row_cis['Norm_GSTIN'] != row_g2b['Norm_GSTIN']:
+                        detail += f" [GSTIN Mismatch: Found under {row_g2b['Norm_GSTIN']}]"
                         
-                        existing = str(cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Comments&Remarks'].values[0])
-                        if existing == 'nan': existing = ""
-                        new_rem = f"{existing} | {layer_name}".strip(" |")
-                        cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Comments&Remarks'] = new_rem
-                    
+                    commit_match(layer_name, row_cis, row_g2b, diff_grand, detail)
                     count += 1
                     break 
-
         match_stats[layer_name] = count
-        return
 
-    # --- EXECUTE LAYERS ---
-    run_layer("Layer 1: Strict", "Inv_Basic", "Inv_Basic", tol_std, strict_tax_split=True)
-    run_layer("Layer 2: Grand Total", "Inv_Basic", "Inv_Basic", tol_std, strict_tax_split=False)
-    run_layer("Layer 3: High Tolerance", "Inv_Basic", "Inv_Basic", tol_high, strict_tax_split=False)
-    run_layer("Layer 4: Numeric Only", "Inv_Num", "Inv_Num", tol_std, strict_tax_split=False)
-    run_layer("Layer 5: Last 4 Digits", "Inv_Last4", "Inv_Last4", tol_std, strict_tax_split=False)
+    # RUN 1-5
+    run_standard_layer("Layer 1: Strict", "Inv_Basic", "Inv_Basic", tol_std, strict_tax_split=True)
+    run_standard_layer("Layer 2: Grand Total", "Inv_Basic", "Inv_Basic", tol_std)
+    run_standard_layer("Layer 3: High Tolerance", "Inv_Basic", "Inv_Basic", tol_high)
+    run_standard_layer("Layer 4: Numeric Only", "Inv_Num", "Inv_Num", tol_std)
+    run_standard_layer("Layer 5: Last 4 Digits", "Inv_Last4", "Inv_Last4", tol_std)
+    
+    # --- LAYER 6: PAN LEVEL ---
+    # Matches Invoice + Amount, but ignores GSTIN Suffix (Uses PAN only)
+    run_standard_layer("Layer 6: PAN Level", "Inv_Basic", "Inv_Basic", tol_std, use_pan=True)
 
-    # --- UNMATCHED ANALYSIS ---
-    # Populate remarks for items that NEVER matched
-    unmatched_mask = cis_proc['Matching Status'] == "Unmatched"
-    if unmatched_mask.any():
-        cis_proc.loc[unmatched_mask, 'Detailed Remark'] = "Mismatch: Invoice Number not found in GSTR-2B"
-        cis_proc.loc[unmatched_mask, 'Short Remark'] = "Not Found"
+    # --- LAYER 7: FUZZY (LEVENSHTEIN) ---
+    def run_fuzzy_layer():
+        count = 0
+        layer_name = "Layer 7: Fuzzy"
+        
+        # Iterate Unmatched CIS
+        for idx, row_cis in cis_grouped.iterrows():
+            if row_cis['Matched_Flag']: continue
+            
+            gstin = row_cis['Norm_GSTIN']
+            cis_inv = str(row_cis['Inv_Basic'])
+            if len(cis_inv) < 3: continue
 
-    # Time Barred Check
+            # Filter Unmatched G2B by GSTIN (Optimization)
+            g2b_candidates = g2b_proc[(g2b_proc['Matching Status'] == "Unmatched") & (g2b_proc['Norm_GSTIN'] == gstin)]
+            
+            if g2b_candidates.empty: continue
+            
+            best_match = None
+            best_score = 0.0
+
+            for g_idx, row_g2b in g2b_candidates.iterrows():
+                # 1. Check Amount First (Optimization) - Must match strictly
+                diff_grand = abs(row_cis['Grand_Total'] - row_g2b['Grand_Total'])
+                if diff_grand > tol_std: continue
+                
+                # 2. Check String Similarity
+                g2b_inv = str(row_g2b['Inv_Basic'])
+                score = get_similarity_ratio(cis_inv, g2b_inv)
+                
+                if score > 0.85 and score > best_score:
+                    best_score = score
+                    best_match = row_g2b
+
+            if best_match is not None:
+                diff_grand = abs(row_cis['Grand_Total'] - best_match['Grand_Total'])
+                detail = f"Fuzzy Match: '{cis_inv}' vs '{best_match['Inv_Basic']}' (Score: {int(best_score*100)}%)"
+                commit_match(layer_name, row_cis, best_match, diff_grand, detail)
+                count += 1
+        
+        match_stats[layer_name] = count
+
+    run_fuzzy_layer()
+
+    # --- LAYER 8: REVERSE CLUBBING (Many G2B -> One CIS) ---
+    def run_reverse_clubbing():
+        count = 0
+        layer_name = "Layer 8: Reverse Clubbing"
+        
+        # 1. Get Unmatched G2B
+        g2b_unmatched = g2b_proc[g2b_proc['Matching Status'] == "Unmatched"]
+        
+        # 2. Group G2B by (GSTIN, Invoice)
+        # This aggregates multiple G2B lines into one virtual invoice
+        g2b_grouped = g2b_unmatched.groupby(['Norm_GSTIN', 'Inv_Basic']).agg({
+            'Grand_Total': 'sum',
+            'INDEX': list, # Collect IDs
+            'Inv_Basic': 'first'
+        }).reset_index()
+        
+        # 3. Compare CIS Group vs G2B Group
+        for idx, row_cis in cis_grouped.iterrows():
+            if row_cis['Matched_Flag']: continue
+            
+            gstin = row_cis['Norm_GSTIN']
+            inv = row_cis['Inv_Basic']
+            
+            # Find matching G2B Group
+            # Note: We assume basic invoice number matches. 
+            # If inv numbers differ, it's payment matching (too complex for this tool).
+            match_row = g2b_grouped[
+                (g2b_grouped['Norm_GSTIN'] == gstin) & 
+                (g2b_grouped['Inv_Basic'] == inv)
+            ]
+            
+            if match_row.empty: continue
+            
+            row_g2b_group = match_row.iloc[0]
+            
+            # Compare Totals
+            diff_grand = abs(row_cis['Grand_Total'] - row_g2b_group['Grand_Total'])
+            
+            if diff_grand <= tol_std:
+                # REVERSE MATCH FOUND
+                g2b_indices = row_g2b_group['INDEX'] # List of G2B IDs
+                detail = f"Reverse Clubbing: 1 CIS vs {len(g2b_indices)} G2B Records"
+                
+                # Manually commit since structure differs
+                cis_grouped.at[idx, 'Matched_Flag'] = True
+                commit_match(layer_name, row_cis, None, diff_grand, detail, is_reverse_club=True, g2b_indices_list=g2b_indices)
+                count += 1
+                
+        match_stats[layer_name] = count
+
+    run_reverse_clubbing()
+
+    # --- CLEANUP ---
     cutoff = pd.Timestamp("2024-03-31")
     cis_proc['D_Obj'] = pd.to_datetime(cis_proc[col_map_cis['DATE']], dayfirst=True, errors='coerce')
     mask = (cis_proc['D_Obj'] < cutoff) & (cis_proc['D_Obj'].notna())
@@ -296,8 +376,7 @@ def run_5_layer_reconciliation(cis_df, gstr2b_df, col_map_cis, col_map_g2b, tol_
     cis_proc.loc[mask, 'Short Remark'] = cis_proc.loc[mask, 'Short Remark'].astype(str) + " + Time Barred"
     cis_proc.loc[mask, 'Detailed Remark'] = cis_proc.loc[mask, 'Detailed Remark'].astype(str) + " [Warning: Date < 31 Mar 2024]"
 
-    # Cleanup
-    drop_cols = ['Norm_GSTIN', 'Inv_Basic', 'Inv_Num', 'Inv_Last4', 'Taxable', 'Tax', 'Grand_Total', 'D_Obj']
+    drop_cols = ['Norm_GSTIN', 'Norm_PAN', 'Inv_Basic', 'Inv_Num', 'Inv_Last4', 'Taxable', 'Tax', 'Grand_Total', 'D_Obj']
     cis_final = cis_proc.drop(columns=[c for c in drop_cols if c in cis_proc.columns])
     g2b_final = g2b_proc.drop(columns=[c for c in drop_cols if c in g2b_proc.columns])
 
@@ -306,15 +385,14 @@ def run_5_layer_reconciliation(cis_df, gstr2b_df, col_map_cis, col_map_g2b, tol_
 # ==========================================
 # 4. STREAMLIT UI
 # ==========================================
-st.set_page_config(page_title="GST Layered Reconciliation", layout="wide")
-st.title("📊 5-Layer Auto-Reconciliation Tool")
+st.set_page_config(page_title="GST 8-Layer Reconciliation", layout="wide")
+st.title("📊 8-Layer Auto-Reconciliation Tool")
+
 st.markdown("""
-**Layers:**
-1. **Strict:** Exact Invoice + Exact Tax/Taxable.
-2. **Grand Total:** Exact Invoice + Exact Grand Total (Ignores Tax Split).
-3. **High Tolerance:** Exact Invoice + Grand Total within Tol.
-4. **Numeric Only:** Strips letters ('GST/01' -> '01').
-5. **Last 4 Digits:** Matches last 4 digits only.
+**New Advanced Layers:**
+* **Layer 6 (PAN):** Matches if vendor filed under Head Office GSTIN.
+* **Layer 7 (Fuzzy):** Matches typos (e.g. `9855` vs `9885`) using Levenshtein distance.
+* **Layer 8 (Reverse Clubbing):** Matches **1 CIS Entry** against **Multiple GSTR-2B Entries**.
 """)
 
 col1, col2 = st.columns(2)
@@ -325,9 +403,9 @@ c1, c2 = st.columns(2)
 tol_std = c1.number_input("Standard Tolerance (₹)", value=2.0)
 tol_high = c2.number_input("High Tolerance (Layer 3) (₹)", value=50.0)
 
-if st.button("🚀 Run Layered Reconciliation", type="primary"):
+if st.button("🚀 Run 8-Layer Algorithm", type="primary"):
     if cis_file and g2b_file:
-        with st.spinner("Processing Layers..."):
+        with st.spinner("Running Advanced Matching Algorithms..."):
             try:
                 # Load
                 df_cis = pd.read_excel(cis_file)
@@ -350,9 +428,9 @@ if st.button("🚀 Run Layered Reconciliation", type="primary"):
                     else: st.error(f"Missing GSTR-2B: {v[0]}"); st.stop()
 
                 # Run
-                cis_res, g2b_res, stats = run_5_layer_reconciliation(df_cis, df_g2b, final_cis_map, final_g2b_map, tol_std, tol_high)
+                cis_res, g2b_res, stats = run_8_layer_reconciliation(df_cis, df_g2b, final_cis_map, final_g2b_map, tol_std, tol_high)
                 
-                st.success("✅ Complete!")
+                st.success("✅ Reconciliation Complete!")
                 st.table(pd.DataFrame(list(stats.items()), columns=['Layer', 'Matches']))
                 
                 output = io.BytesIO()
