@@ -221,6 +221,7 @@ def run_8_layer_reconciliation(cis_df, gstr2b_df, col_map_cis, col_map_g2b, tol_
         if is_reverse:
             cis_indices = row_cis['Index CIS']
             g2b_indices = g2b_ids
+            # cis_grouped update handled in loop
         else:
             cis_indices = row_cis['Index CIS']
             g2b_indices = [row_g2b['INDEX']]
