@@ -1,16 +1,3 @@
-You are absolutely right. The detailed remarks are critical for audit trails. I have restored the **full, descriptive remark logic** while keeping the **5-Layer Architecture**.
-
-Now, the **Detailed Remark** column will look like this:
-
-* **Layer 1 Match:** `"Matched: GSTIN, Invoice Number, Taxable Value, Tax Amount"`
-* **Layer 2 Match:** `"Matched: GSTIN, Invoice Number | Mismatch: Tax/Taxable Split (Grand Total Matched)"`
-* **Layer 4 Match:** `"Matched: GSTIN, Numeric Invoice (001 vs INV/001), Grand Total"`
-
-Here is the **final, polished code**.
-
-### **Python Code (`app.py`)**
-
-```python
 import streamlit as st
 import pandas as pd
 import io
@@ -375,5 +362,3 @@ if st.button("🚀 Run Layered Reconciliation", type="primary"):
                 st.download_button("Download Result", output.getvalue(), "Reconciliation_Output.xlsx")
 
             except Exception as e: st.error(f"Error: {e}")
-
-```
