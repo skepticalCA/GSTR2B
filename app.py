@@ -258,7 +258,7 @@ def run_reconciliation(cis_df, gstr2b_df, col_map_cis, col_map_g2b, tolerance):
 # 4. STREAMLIT UI
 # ==========================================
 st.set_page_config(page_title="GST Reconciliation Tool", layout="wide")
-st.title("📊 Auto-Reconciliation Tool (Detailed Remarks)")
+st.title("📊 Auto-Reconciliation Tool ")
 
 col1, col2 = st.columns(2)
 with col1: cis_file = st.file_uploader("Upload CIS Unmatched File", type=['xlsx'], key="cis")
