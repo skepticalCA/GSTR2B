@@ -147,13 +147,10 @@ def run_8_layer_reconciliation(cis_df, gstr2b_df, col_map_cis, col_map_g2b, tol_
     cis_proc = cis_df.copy()
     g2b_proc = gstr2b_df.copy()
 
-    # --- [CRITICAL FIX] NUCLEAR CLEANUP ---
-    # 1. Remove Duplicate Columns from Source (e.g., duplicate 'Unnamed: 0')
+    # --- NUCLEAR CLEANUP ---
     cis_proc = cis_proc.loc[:, ~cis_proc.columns.duplicated()]
     g2b_proc = g2b_proc.loc[:, ~g2b_proc.columns.duplicated()]
 
-    # 2. Force Drop ALL internal columns we plan to create
-    # This ensures "already exists" error never happens, even if you upload the result file.
     cols_to_purge = [
         'Norm_GSTIN', 'Norm_PAN', 'Inv_Basic', 'Inv_Num', 'Inv_Last4',
         'Taxable', 'Tax', 'Grand_Total', 'Matching Status', 'Match Category',
@@ -221,7 +218,6 @@ def run_8_layer_reconciliation(cis_df, gstr2b_df, col_map_cis, col_map_g2b, tol_
         if is_reverse:
             cis_indices = row_cis['Index CIS']
             g2b_indices = g2b_ids
-            # cis_grouped update handled in loop
         else:
             cis_indices = row_cis['Index CIS']
             g2b_indices = [row_g2b['INDEX']]
@@ -364,10 +360,11 @@ def run_8_layer_reconciliation(cis_df, gstr2b_df, col_map_cis, col_map_g2b, tol_
         
         # Group Unmatched G2B
         g2b_unmatched = g2b_proc[g2b_proc['Matching Status'] == "Unmatched"]
+        
+        # [FIXED HERE] Removed 'Inv_Basic': 'first' from aggregation
         g2b_grouped = g2b_unmatched.groupby(['Norm_GSTIN', 'Inv_Basic']).agg({
             'Grand_Total': 'sum',
-            'INDEX': list,
-            'Inv_Basic': 'first'
+            'INDEX': list
         }).reset_index()
         
         for idx, row_cis in cis_grouped.iterrows():
@@ -446,7 +443,7 @@ if st.button("🚀 Run 8-Layer Algorithm", type="primary"):
     if cis_file and g2b_file:
         with st.spinner("Processing 8-Layer Algorithm..."):
             try:
-                # --- [FIX] LOAD AND DEDUPLICATE IMMEDIATELY ---
+                # --- LOAD AND DEDUPLICATE IMMEDIATELY ---
                 df_cis = pd.read_excel(cis_file)
                 df_cis = df_cis.loc[:, ~df_cis.columns.duplicated()] # Safety deduplication
                 
