@@ -5,51 +5,42 @@ import re
 import numpy as np
 
 # ==========================================
-# 1. CONFIGURATION: EXACT COLUMN MAPPING
+# 1. SMART HEADER MAPPING (The Fix)
 # ==========================================
-# These are the EXACT headers you provided. 
-# We map them to internal names for processing.
-
-CIS_MAPPING = {
-    'GSTIN': 'SupplierGSTIN',          # User provided: SupplierGSTIN
-    'INVOICE_NUM': 'DocumentNumber',   # User provided: DocumentNumber
-    'DATE': 'DocumentDate',            # User provided: DocumentDate
-    'TAXABLE': 'TaxableValue',         # User provided: TaxableValue
-    'IGST': 'IntegratedTaxAmount',     # User provided: IntegratedTaxAmount
-    'CGST': 'CentralTaxAmount',        # User provided: CentralTaxAmount
-    'SGST': 'StateUT TaxAmount'        # User provided: StateUT TaxAmount
-}
-
-GSTR2B_MAPPING = {
-    'GSTIN': 'GSTIN of supplier',      # User provided: GSTIN of supplier
-    'INVOICE_NUM': 'Invoice number',   # User provided: Invoice number
-    'DATE': 'Invoice Date',            # User provided: Invoice Date
-    'TAXABLE': 'Taxable Value (₹)',    # User provided: Taxable Value (₹)
-    'IGST': 'Integrated Tax(₹)',       # User provided: Integrated Tax(₹)
-    'CGST': 'Central Tax(₹)',          # User provided: Central Tax(₹)
-    'SGST': 'State/UT Tax(₹)'          # User provided: State/UT Tax(₹)
-}
+def find_column(df, candidates):
+    """
+    Searches for a column in the dataframe that matches one of the candidate names.
+    It ignores case, spaces, and special characters.
+    """
+    # 1. Create a normalized map of existing columns
+    #    "Invoice Number " -> "invoicenumber"
+    existing_cols = {c: str(c).strip().lower().replace(' ', '').replace('\n', '').replace('_', '') for c in df.columns}
+    
+    # 2. Check candidates
+    for cand in candidates:
+        clean_cand = cand.strip().lower().replace(' ', '').replace('_', '')
+        
+        # Look for exact match in cleaned keys
+        for original_col, clean_col in existing_cols.items():
+            if clean_cand == clean_col:
+                return original_col
+                
+    return None
 
 # ==========================================
 # 2. HELPER FUNCTIONS
 # ==========================================
-
 def advanced_normalize_invoice(inv_num):
-    """Normalizes invoice numbers (removes special chars, leading zeros)."""
-    if pd.isna(inv_num) or str(inv_num).strip() == '':
-        return ""
+    if pd.isna(inv_num) or str(inv_num).strip() == '': return ""
     s = str(inv_num).upper()
-    s = "".join(s.split()) # Remove whitespace
-    s = re.sub(r'[^A-Z0-9]', '', s) # Keep only Alphanumeric
-    s = s.lstrip('0') # Remove leading zeros
+    s = "".join(s.split()) 
+    s = re.sub(r'[^A-Z0-9]', '', s)
+    s = s.lstrip('0')
     return s if s else "0"
 
 def clean_currency(val):
-    """Parses currency, handling commas and symbols."""
-    if pd.isna(val) or str(val).strip() == '':
-        return 0.0
-    if isinstance(val, (int, float)):
-        return float(val)
+    if pd.isna(val) or str(val).strip() == '': return 0.0
+    if isinstance(val, (int, float)): return float(val)
     try:
         clean_str = str(val).replace(',', '').replace(' ', '').replace('₹', '')
         return float(clean_str)
@@ -63,85 +54,64 @@ def normalize_gstin(gstin):
 # ==========================================
 # 3. CORE LOGIC
 # ==========================================
-
-def run_reconciliation(cis_df, gstr2b_df, tolerance):
-    # --- A. PREPROCESSING CIS DATA ---
+def run_reconciliation(cis_df, gstr2b_df, col_map_cis, col_map_g2b, tolerance):
     cis_proc = cis_df.copy()
+    g2b_proc = gstr2b_df.copy()
     
-    # Verify Columns exist
-    for key, col_name in CIS_MAPPING.items():
-        if col_name not in cis_proc.columns:
-            st.error(f"❌ CIS File Error: Missing column '{col_name}'. Please check your file headers.")
-            st.stop()
-
+    # --- PREP CIS ---
     if 'Index CIS' not in cis_proc.columns:
         cis_proc['Index CIS'] = range(1, len(cis_proc) + 1)
 
-    # Normalize Keys
-    cis_proc['Norm_GSTIN'] = cis_proc[CIS_MAPPING['GSTIN']].apply(normalize_gstin)
-    cis_proc['Norm_Invoice'] = cis_proc[CIS_MAPPING['INVOICE_NUM']].apply(advanced_normalize_invoice)
+    # Normalize Keys using the DYNAMICALLY FOUND columns
+    cis_proc['Norm_GSTIN'] = cis_proc[col_map_cis['GSTIN']].apply(normalize_gstin)
+    cis_proc['Norm_Invoice'] = cis_proc[col_map_cis['INVOICE']].apply(advanced_normalize_invoice)
     
-    # Clean Financials
-    cis_proc['Taxable_Clean'] = cis_proc[CIS_MAPPING['TAXABLE']].apply(clean_currency)
-    cis_proc['IGST_Clean'] = cis_proc[CIS_MAPPING['IGST']].apply(clean_currency)
-    cis_proc['CGST_Clean'] = cis_proc[CIS_MAPPING['CGST']].apply(clean_currency)
-    cis_proc['SGST_Clean'] = cis_proc[CIS_MAPPING['SGST']].apply(clean_currency)
-    
-    cis_proc['Total_Tax'] = cis_proc['IGST_Clean'] + cis_proc['CGST_Clean'] + cis_proc['SGST_Clean']
+    # Financials
+    cis_proc['Taxable_Clean'] = cis_proc[col_map_cis['TAXABLE']].apply(clean_currency)
+    cis_proc['Total_Tax'] = (
+        cis_proc[col_map_cis['IGST']].apply(clean_currency) + 
+        cis_proc[col_map_cis['CGST']].apply(clean_currency) + 
+        cis_proc[col_map_cis['SGST']].apply(clean_currency)
+    )
 
-    # Initialize Output Columns
     cis_proc['Matching Status'] = "Unmatched"
     cis_proc['Short Remark'] = "Not Found"
     cis_proc['Detailed Remark'] = ""
     cis_proc['GSTR 2B Key'] = ""
 
-    # --- B. PREPROCESSING GSTR-2B DATA ---
-    g2b_proc = gstr2b_df.copy()
-    
-    # Verify Columns exist
-    for key, col_name in GSTR2B_MAPPING.items():
-        if col_name not in g2b_proc.columns:
-            st.error(f"❌ GSTR-2B File Error: Missing column '{col_name}'. Please check your file headers.")
-            st.stop()
-
+    # --- PREP GSTR-2B ---
     if 'INDEX' not in g2b_proc.columns:
         g2b_proc['INDEX'] = g2b_proc.index + 100000 
 
-    # Normalize Keys
-    g2b_proc['Norm_GSTIN'] = g2b_proc[GSTR2B_MAPPING['GSTIN']].apply(normalize_gstin)
-    g2b_proc['Norm_Invoice'] = g2b_proc[GSTR2B_MAPPING['INVOICE_NUM']].apply(advanced_normalize_invoice)
+    g2b_proc['Norm_GSTIN'] = g2b_proc[col_map_g2b['GSTIN']].apply(normalize_gstin)
+    g2b_proc['Norm_Invoice'] = g2b_proc[col_map_g2b['INVOICE']].apply(advanced_normalize_invoice)
     
-    # Clean Financials
-    g2b_proc['Taxable_Clean'] = g2b_proc[GSTR2B_MAPPING['TAXABLE']].apply(clean_currency)
-    g2b_proc['IGST_Clean'] = g2b_proc[GSTR2B_MAPPING['IGST']].apply(clean_currency)
-    g2b_proc['CGST_Clean'] = g2b_proc[GSTR2B_MAPPING['CGST']].apply(clean_currency)
-    g2b_proc['SGST_Clean'] = g2b_proc[GSTR2B_MAPPING['SGST']].apply(clean_currency)
-    
-    g2b_proc['Total_Tax_Clean'] = g2b_proc['IGST_Clean'] + g2b_proc['CGST_Clean'] + g2b_proc['SGST_Clean']
+    g2b_proc['Taxable_Clean'] = g2b_proc[col_map_g2b['TAXABLE']].apply(clean_currency)
+    g2b_proc['Total_Tax_Clean'] = (
+        g2b_proc[col_map_g2b['IGST']].apply(clean_currency) + 
+        g2b_proc[col_map_g2b['CGST']].apply(clean_currency) + 
+        g2b_proc[col_map_g2b['SGST']].apply(clean_currency)
+    )
 
     g2b_proc['CIS Key'] = ""
     g2b_proc['Matching Status'] = "Unmatched"
 
-    # --- C. CLUBBING & AGGREGATION ---
-    # Group CIS data
+    # --- CLUBBING & MATCHING ---
     cis_grouped = cis_proc.groupby(['Norm_GSTIN', 'Norm_Invoice']).agg({
         'Taxable_Clean': 'sum',
         'Total_Tax': 'sum',
-        CIS_MAPPING['DATE']: 'first',
+        col_map_cis['DATE']: 'first',
         'Index CIS': list
     }).reset_index()
 
-    # --- D. MATCHING ENGINE ---
     matched_g2b_indices = set()
 
     for idx, row_cis_group in cis_grouped.iterrows():
         gstin = row_cis_group['Norm_GSTIN']
         inv_num = row_cis_group['Norm_Invoice']
         
-        if not gstin or not inv_num:
-            continue
+        if not gstin or not inv_num: continue
 
-        # Filter GSTR-2B
         candidates = g2b_proc[
             (g2b_proc['Norm_GSTIN'] == gstin) & 
             (g2b_proc['Norm_Invoice'] == inv_num) &
@@ -155,12 +125,12 @@ def run_reconciliation(cis_df, gstr2b_df, tolerance):
         
         if not candidates.empty:
             for i, row_g2b in candidates.iterrows():
-                diff_taxable = abs(row_cis_group['Taxable_Clean'] - row_g2b['Taxable_Clean'])
                 diff_tax = abs(row_cis_group['Total_Tax'] - row_g2b['Total_Tax_Clean'])
+                diff_taxable = abs(row_cis_group['Taxable_Clean'] - row_g2b['Taxable_Clean'])
                 
-                # Check Date
-                cis_date = pd.to_datetime(row_cis_group[CIS_MAPPING['DATE']], dayfirst=True, errors='coerce')
-                g2b_date = pd.to_datetime(row_g2b[GSTR2B_MAPPING['DATE']], dayfirst=True, errors='coerce')
+                # Date Check
+                cis_date = pd.to_datetime(row_cis_group[col_map_cis['DATE']], dayfirst=True, errors='coerce')
+                g2b_date = pd.to_datetime(row_g2b[col_map_g2b['DATE']], dayfirst=True, errors='coerce')
                 
                 date_str = ""
                 if pd.notna(cis_date) and pd.notna(g2b_date) and cis_date != g2b_date:
@@ -173,15 +143,13 @@ def run_reconciliation(cis_df, gstr2b_df, tolerance):
                     if date_str: detail_rem.append(f"Matched w/ Date Diff{date_str}")
                     break
                 else:
-                    detail_rem.append(f"Value Diff: Taxable {diff_taxable:.2f}, Tax {diff_tax:.2f}{date_str}")
+                    detail_rem.append(f"Value Diff: Taxable {diff_taxable:.2f}, Tax {diff_tax:.2f}")
             
-            if not match_found:
-                 short_rem = "Value Mismatch"
+            if not match_found: short_rem = "Value Mismatch"
         else:
             short_rem = "Invoice Not Found"
             detail_rem.append("No invoice number match in GSTR-2B")
 
-        # --- E. UPDATE RECORDS ---
         original_cis_indices = row_cis_group['Index CIS']
         
         if match_found:
@@ -193,83 +161,115 @@ def run_reconciliation(cis_df, gstr2b_df, tolerance):
                 cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Matching Status'] = "Matched"
                 cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Short Remark'] = short_rem
                 cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'GSTR 2B Key'] = matched_g2b_idx
-                if detail_rem:
-                     cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Detailed Remark'] = "; ".join(detail_rem)
+                if detail_rem: cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Detailed Remark'] = "; ".join(detail_rem)
         else:
             for cis_id in original_cis_indices:
                 cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Matching Status'] = "Unmatched"
                 cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Short Remark'] = short_rem
+                # Update Remarks
                 existing = cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Comments&Remarks']
                 base_rem = str(existing.values[0]) if pd.notna(existing.values[0]) else ""
                 final_detail = "; ".join(detail_rem)
                 cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Detailed Remark'] = final_detail
                 cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Comments&Remarks'] = f"{base_rem} | {short_rem}: {final_detail}".strip(" |")
 
-    # --- F. TIME BARRED CHECK (Sec 16(4)) ---
+    # Time Barred Check
     cutoff_date = pd.Timestamp("2024-03-31")
-    cis_proc['Date_Obj'] = pd.to_datetime(cis_proc[CIS_MAPPING['DATE']], dayfirst=True, errors='coerce')
+    cis_proc['Date_Obj'] = pd.to_datetime(cis_proc[col_map_cis['DATE']], dayfirst=True, errors='coerce')
     time_barred_mask = (cis_proc['Date_Obj'] < cutoff_date) & (cis_proc['Date_Obj'].notna())
-    
     cis_proc.loc[time_barred_mask, 'Short Remark'] = cis_proc.loc[time_barred_mask, 'Short Remark'] + " + Time Barred"
-    cis_proc.loc[time_barred_mask, 'Detailed Remark'] = cis_proc.loc[time_barred_mask, 'Detailed Remark'] + "; Inv Date before 31 Mar 2024"
-
-    # Cleanup Output (Keep useful cols + results)
-    # We return the modified dataframe but drop temp calculation columns
-    cols_to_drop = ['Norm_GSTIN', 'Norm_Invoice', 'Taxable_Clean', 'IGST_Clean', 'CGST_Clean', 'SGST_Clean', 'Total_Tax', 'Date_Obj']
-    cis_final = cis_proc.drop(columns=[c for c in cols_to_drop if c in cis_proc.columns])
     
-    g2b_drop = ['Norm_GSTIN', 'Norm_Invoice', 'Taxable_Clean', 'IGST_Clean', 'CGST_Clean', 'SGST_Clean', 'Total_Tax_Clean']
-    g2b_final = g2b_proc.drop(columns=[c for c in g2b_drop if c in g2b_proc.columns])
-
-    return cis_final, g2b_final
+    # Cleanup
+    return cis_proc, g2b_proc
 
 # ==========================================
 # 4. STREAMLIT UI
 # ==========================================
-
 st.set_page_config(page_title="GST Reconciliation Tool", layout="wide")
-st.title("📊 Auto-Reconciliation Tool")
+st.title("📊 Auto-Reconciliation Tool (Smart Header Fix)")
 
 col1, col2 = st.columns(2)
-with col1:
-    cis_file = st.file_uploader("Upload CIS Unmatched File", type=['xlsx'], key="cis")
-with col2:
-    g2b_file = st.file_uploader("Upload GSTR-2B File", type=['xlsx'], key="g2b")
-
+with col1: cis_file = st.file_uploader("Upload CIS Unmatched File", type=['xlsx'], key="cis")
+with col2: g2b_file = st.file_uploader("Upload GSTR-2B File", type=['xlsx'], key="g2b")
 tolerance = st.number_input("Financial Tolerance (₹)", min_value=0.0, value=10.0, step=0.1)
 
 if st.button("🚀 Run Reconciliation", type="primary"):
     if cis_file and g2b_file:
         with st.spinner("Processing..."):
             try:
-                # Load CIS
                 df_cis = pd.read_excel(cis_file)
-                df_cis.columns = df_cis.columns.str.strip() # Minimal clean
-
-                # Load GSTR-2B
+                
+                # Load GSTR-2B (Search for B2B sheet)
                 xl = pd.ExcelFile(g2b_file)
                 sheet_name = 'B2B' if 'B2B' in xl.sheet_names else xl.sheet_names[0]
                 
-                # Dynamic Header Search for GSTR-2B
-                # Even with exact names, the header might be on Row 2 or 3
-                target_col = GSTR2B_MAPPING['GSTIN'] # 'GSTIN of supplier'
-                
+                # Header Search Loop for GSTR-2B
                 df_g2b = None
-                found = False
+                target_key = "GSTIN"
+                found_header = False
                 
-                for i in range(5): # Check first 5 rows
-                    temp_df = pd.read_excel(g2b_file, sheet_name=sheet_name, header=i)
-                    temp_df.columns = temp_df.columns.str.strip()
-                    if target_col in temp_df.columns:
-                        df_g2b = temp_df
-                        found = True
+                # Check first 5 rows for a known column "GSTIN"
+                for i in range(5):
+                    temp = pd.read_excel(g2b_file, sheet_name=sheet_name, header=i)
+                    if find_column(temp, ['GSTIN of supplier', 'GSTIN', 'Supplier GSTIN']):
+                        df_g2b = temp
+                        found_header = True
                         break
                 
-                if not found:
-                    st.error(f"Could not find column '{target_col}' in GSTR-2B file (checked first 5 rows).")
+                if not found_header:
+                    st.error("❌ Could not detect header row in GSTR-2B. Please check the file.")
                     st.stop()
 
-                cis_res, g2b_res = run_reconciliation(df_cis, df_g2b, tolerance)
+                # --- BUILD DYNAMIC MAPS ---
+                # We define lists of "Possible Names" for each required field
+                
+                # CIS MAPPING
+                cis_required = {
+                    'GSTIN': ['SupplierGSTIN', 'GSTIN'],
+                    'INVOICE': ['DocumentNumber', 'Invoice Number', 'Inv No'],
+                    'DATE': ['DocumentDate', 'Invoice Date', 'Date'],
+                    'TAXABLE': ['TaxableValue', 'Taxable Value'],
+                    'IGST': ['IntegratedTaxAmount', 'Integrated Tax', 'IGST Amount'],
+                    'CGST': ['CentralTaxAmount', 'Central Tax', 'CGST Amount'],
+                    'SGST': ['StateUT TaxAmount', 'State/UT Tax', 'SGST Amount']
+                }
+                
+                # GSTR2B MAPPING
+                g2b_required = {
+                    'GSTIN': ['GSTIN of supplier', 'Supplier GSTIN'],
+                    'INVOICE': ['Invoice number', 'Invoice No'],
+                    'DATE': ['Invoice Date', 'Date'],
+                    'TAXABLE': ['Taxable Value (₹)', 'Taxable Value'],
+                    'IGST': ['Integrated Tax(₹)', 'Integrated Tax'],
+                    'CGST': ['Central Tax(₹)', 'Central Tax'],
+                    'SGST': ['State/UT Tax(₹)', 'State/UT Tax']
+                }
+
+                final_map_cis = {}
+                final_map_g2b = {}
+                missing_cols = []
+
+                # Find CIS Cols
+                for key, candidates in cis_required.items():
+                    found = find_column(df_cis, candidates)
+                    if found: final_map_cis[key] = found
+                    else: missing_cols.append(f"CIS: {candidates[0]}")
+
+                # Find GSTR2B Cols
+                for key, candidates in g2b_required.items():
+                    found = find_column(df_g2b, candidates)
+                    if found: final_map_g2b[key] = found
+                    else: missing_cols.append(f"GSTR-2B: {candidates[0]}")
+
+                if missing_cols:
+                    st.error("❌ Missing Columns! The tool could not match these headers:")
+                    st.write(missing_cols)
+                    st.write("---")
+                    st.write("Your GSTR-2B Columns found:", df_g2b.columns.tolist())
+                    st.stop()
+
+                # Run Logic with Dynamic Map
+                cis_res, g2b_res = run_reconciliation(df_cis, df_g2b, final_map_cis, final_map_g2b, tolerance)
                 
                 st.success(f"Matched: {len(cis_res[cis_res['Matching Status'] == 'Matched'])}")
                 
@@ -282,5 +282,3 @@ if st.button("🚀 Run Reconciliation", type="primary"):
 
             except Exception as e:
                 st.error(f"Error: {e}")
-    else:
-        st.warning("Please upload both files.")
