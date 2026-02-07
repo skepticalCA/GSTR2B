@@ -63,6 +63,10 @@ def load_gstr2b_with_stitching(file_obj, sheet_name):
     except:
         df_final = pd.read_excel(file_obj, sheet_name=0, header=header_end_row + 1)
     
+    # --- SAFETY: DEDUPLICATE COLUMNS IMMEDIATELY ---
+    df_final = df_final.loc[:, ~df_final.columns.duplicated()]
+
+    # Assign columns safely
     current_cols = len(df_final.columns)
     if len(final_headers) >= current_cols:
         df_final.columns = final_headers[:current_cols]
@@ -143,14 +147,24 @@ def run_8_layer_reconciliation(cis_df, gstr2b_df, col_map_cis, col_map_g2b, tol_
     cis_proc = cis_df.copy()
     g2b_proc = gstr2b_df.copy()
 
-    # Drop temp columns if they exist (SAFETY FIX)
-    temp_cols = ['Norm_GSTIN', 'Norm_PAN', 'Inv_Basic', 'Inv_Num', 'Inv_Last4', 'Taxable', 'Tax', 'Grand_Total']
-    cis_proc.drop(columns=[c for c in temp_cols if c in cis_proc.columns], inplace=True)
-    g2b_proc.drop(columns=[c for c in temp_cols if c in g2b_proc.columns], inplace=True)
+    # --- [CRITICAL FIX] NUCLEAR CLEANUP ---
+    # 1. Remove Duplicate Columns from Source (e.g., duplicate 'Unnamed: 0')
+    cis_proc = cis_proc.loc[:, ~cis_proc.columns.duplicated()]
+    g2b_proc = g2b_proc.loc[:, ~g2b_proc.columns.duplicated()]
+
+    # 2. Force Drop ALL internal columns we plan to create
+    # This ensures "already exists" error never happens, even if you upload the result file.
+    cols_to_purge = [
+        'Norm_GSTIN', 'Norm_PAN', 'Inv_Basic', 'Inv_Num', 'Inv_Last4',
+        'Taxable', 'Tax', 'Grand_Total', 'Matching Status', 'Match Category',
+        'Detailed Remark', 'GSTR 2B Key', 'CIS Key', 'Index CIS', 'INDEX', 'Matched_Flag'
+    ]
+    cis_proc.drop(columns=[c for c in cols_to_purge if c in cis_proc.columns], inplace=True, errors='ignore')
+    g2b_proc.drop(columns=[c for c in cols_to_purge if c in g2b_proc.columns], inplace=True, errors='ignore')
 
     # IDs
-    if 'Index CIS' not in cis_proc.columns: cis_proc['Index CIS'] = range(1, len(cis_proc) + 1)
-    if 'INDEX' not in g2b_proc.columns: g2b_proc['INDEX'] = g2b_proc.index + 100000 
+    cis_proc['Index CIS'] = range(1, len(cis_proc) + 1)
+    g2b_proc['INDEX'] = g2b_proc.index + 100000 
 
     # Keys: GSTIN & PAN
     cis_proc['Norm_GSTIN'] = cis_proc[col_map_cis['GSTIN']].apply(normalize_gstin)
@@ -207,7 +221,6 @@ def run_8_layer_reconciliation(cis_df, gstr2b_df, col_map_cis, col_map_g2b, tol_
         if is_reverse:
             cis_indices = row_cis['Index CIS']
             g2b_indices = g2b_ids
-            # cis_grouped update handled in loop
         else:
             cis_indices = row_cis['Index CIS']
             g2b_indices = [row_g2b['INDEX']]
@@ -432,9 +445,13 @@ if st.button("🚀 Run 8-Layer Algorithm", type="primary"):
     if cis_file and g2b_file:
         with st.spinner("Processing 8-Layer Algorithm..."):
             try:
+                # --- [FIX] LOAD AND DEDUPLICATE IMMEDIATELY ---
                 df_cis = pd.read_excel(cis_file)
+                df_cis = df_cis.loc[:, ~df_cis.columns.duplicated()] # Safety deduplication
+                
                 xl = pd.ExcelFile(g2b_file)
                 df_g2b = load_gstr2b_with_stitching(g2b_file, 'B2B' if 'B2B' in xl.sheet_names else xl.sheet_names[0])
+                df_g2b = df_g2b.loc[:, ~df_g2b.columns.duplicated()] # Safety deduplication
 
                 cis_map = {'GSTIN': ['SupplierGSTIN','GSTIN'], 'INVOICE': ['DocumentNumber','Invoice Number'], 'DATE': ['DocumentDate','Invoice Date'], 'TAXABLE': ['TaxableValue','Taxable Value'], 'IGST': ['IntegratedTaxAmount','Integrated Tax'], 'CGST': ['CentralTaxAmount','Central Tax'], 'SGST': ['StateUT TaxAmount','State/UT Tax']}
                 g2b_map = {'GSTIN': ['GSTIN of supplier','Supplier GSTIN'], 'INVOICE': ['Invoice number','Invoice No'], 'DATE': ['Invoice Date','Date'], 'TAXABLE': ['Taxable Value (₹)','Taxable Value'], 'IGST': ['Integrated Tax(₹)','Integrated Tax'], 'CGST': ['Central Tax(₹)','Central Tax'], 'SGST': ['State/UT Tax(₹)','State/UT Tax']}
