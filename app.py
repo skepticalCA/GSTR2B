@@ -99,7 +99,7 @@ st.markdown("""
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     st.title("📊 GST Reconciliation Tool")
-    st.markdown("**8-Layer Intelligent Matching Algorithm**")
+    st.markdown("**10-Layer Intelligent Matching Algorithm**")
 
 st.divider()
 
@@ -232,6 +232,35 @@ def normalize_inv_numeric(inv):
     s = s.lstrip('0')
     return s
 
+def normalize_inv_stripped(inv):
+    """Enhanced normalization: strips common prefixes and suffixes"""
+    if pd.isna(inv): return ""
+    s = str(inv).upper()
+    s = "".join(s.split())
+    
+    # Strip common prefixes (year patterns, branch codes)
+    prefix_patterns = [
+        r'^(FY)?20\d{2}[-/]?',  # FY2024-, 2024-, 2024/
+        r'^(FY)?\d{2}[-/]?',     # FY24-, 24-
+        r'^(FY)?\d{2}[-]?\d{2}[-/]?',  # 24-25/, FY24-25-
+        r'^[A-Z]{2,4}[-/]',      # MUM-, DEL-, HO-, BR1-, BRANCH-
+    ]
+    for pattern in prefix_patterns:
+        s = re.sub(pattern, '', s)
+    
+    # Strip common suffixes
+    suffix_patterns = [
+        r'[-/](REV|COR|AMD|A|B|C|INV|INVOICE)$',  # -REV, -COR, -A, /INV
+        r'[-/]\d{1}$',  # -1, -2, -3 (revision numbers)
+    ]
+    for pattern in suffix_patterns:
+        s = re.sub(pattern, '', s)
+    
+    # Remove all non-alphanumeric
+    s = re.sub(r'[^A-Z0-9]', '', s)
+    s = s.lstrip('0')
+    return s
+
 def get_last_4(inv):
     if pd.isna(inv): return ""
     s = str(inv)
@@ -256,7 +285,7 @@ def run_8_layer_reconciliation(cis_df, gstr2b_df, col_map_cis, col_map_g2b, tol_
     g2b_proc = g2b_proc.loc[:, ~g2b_proc.columns.duplicated()]
 
     cols_to_purge = [
-        'Norm_GSTIN', 'Norm_PAN', 'Inv_Basic', 'Inv_Num', 'Inv_Last4',
+        'Norm_GSTIN', 'Norm_PAN', 'Inv_Basic', 'Inv_Num', 'Inv_Last4', 'Inv_Stripped',
         'Taxable', 'Tax', 'Grand_Total', 'Matching Status', 'Match Category',
         'Detailed Remark', 'GSTR 2B Key', 'CIS Key', 'Index CIS', 'INDEX', 'Matched_Flag'
     ]
@@ -281,10 +310,12 @@ def run_8_layer_reconciliation(cis_df, gstr2b_df, col_map_cis, col_map_g2b, tol_
     cis_proc['Inv_Basic'] = cis_proc[col_map_cis['INVOICE']].apply(normalize_inv_basic)
     cis_proc['Inv_Num'] = cis_proc[col_map_cis['INVOICE']].apply(normalize_inv_numeric)
     cis_proc['Inv_Last4'] = cis_proc[col_map_cis['INVOICE']].apply(get_last_4)
+    cis_proc['Inv_Stripped'] = cis_proc[col_map_cis['INVOICE']].apply(normalize_inv_stripped)
 
     g2b_proc['Inv_Basic'] = g2b_proc[col_map_g2b['INVOICE']].apply(normalize_inv_basic)
     g2b_proc['Inv_Num'] = g2b_proc[col_map_g2b['INVOICE']].apply(normalize_inv_numeric)
     g2b_proc['Inv_Last4'] = g2b_proc[col_map_g2b['INVOICE']].apply(get_last_4)
+    g2b_proc['Inv_Stripped'] = g2b_proc[col_map_g2b['INVOICE']].apply(normalize_inv_stripped)
 
     # Financials
     cis_proc['Taxable'] = cis_proc[col_map_cis['TAXABLE']].apply(clean_currency)
@@ -314,7 +345,7 @@ def run_8_layer_reconciliation(cis_df, gstr2b_df, col_map_cis, col_map_g2b, tol_
     # --- B. GROUPING (Standard Clubbing) - OPTIMIZED ---
     cis_grouped = cis_proc.groupby(['Norm_GSTIN', 'Norm_PAN', 'Inv_Basic'], sort=False).agg({
         'Taxable': 'sum', 'Tax': 'sum', 'Grand_Total': 'sum',
-        'Inv_Num': 'first', 'Inv_Last4': 'first',
+        'Inv_Num': 'first', 'Inv_Last4': 'first', 'Inv_Stripped': 'first',
         col_map_cis['INVOICE']: 'first', col_map_cis['DATE']: 'first',
         'Index CIS': list
     }).reset_index()
@@ -431,9 +462,10 @@ def run_8_layer_reconciliation(cis_df, gstr2b_df, col_map_cis, col_map_g2b, tol_
         ("Layer 1: Strict", "Inv_Basic", "Inv_Basic", tol_std, True, False, 0.50),
         ("Layer 2: Grand Total", "Inv_Basic", "Inv_Basic", tol_std, False, False, 0.55),
         ("Layer 3: High Tolerance", "Inv_Basic", "Inv_Basic", tol_high, False, False, 0.60),
-        ("Layer 4: Numeric Only", "Inv_Num", "Inv_Num", tol_std, False, False, 0.65),
-        ("Layer 5: Last 4 Digits", "Inv_Last4", "Inv_Last4", tol_std, False, False, 0.70),
-        ("Layer 6: PAN Level", "Inv_Basic", "Inv_Basic", tol_std, False, True, 0.75),
+        ("Layer 4: Stripped Pattern", "Inv_Stripped", "Inv_Stripped", tol_std, False, False, 0.63),
+        ("Layer 5: Numeric Only", "Inv_Num", "Inv_Num", tol_std, False, False, 0.66),
+        ("Layer 6: Last 4 Digits", "Inv_Last4", "Inv_Last4", tol_std, False, False, 0.70),
+        ("Layer 7: PAN Level", "Inv_Basic", "Inv_Basic", tol_std, False, True, 0.75),
     ]
     
     for layer_name, col_cis, col_g2b, tol, strict, use_pan, prog in layers:
@@ -441,10 +473,10 @@ def run_8_layer_reconciliation(cis_df, gstr2b_df, col_map_cis, col_map_g2b, tol_
             progress_callback(prog, f"Running {layer_name}...")
         run_standard_layer(layer_name, col_cis, col_g2b, tol, strict, use_pan)
 
-    # --- LAYER 7: FUZZY (LEVENSHTEIN) ---
+    # --- LAYER 8: FUZZY (LEVENSHTEIN) ---
     def run_fuzzy_layer():
         count = 0
-        layer_name = "Layer 7: Fuzzy"
+        layer_name = "Layer 8: Fuzzy"
         
         # Pre-filter and index G2B
         g2b_unmatched = g2b_proc[g2b_proc['Matching Status'] == "Unmatched"].copy()
@@ -485,13 +517,96 @@ def run_8_layer_reconciliation(cis_df, gstr2b_df, col_map_cis, col_map_g2b, tol_
         match_stats[layer_name] = count
 
     if progress_callback:
-        progress_callback(0.80, "Running Layer 7: Fuzzy Matching...")
+        progress_callback(0.78, "Running Layer 8: Fuzzy Matching...")
     run_fuzzy_layer()
 
-    # --- LAYER 8: REVERSE CLUBBING ---
+    # --- LAYER 9: FORWARD CLUBBING (Many CIS → One G2B) ---
+    def run_forward_clubbing():
+        count = 0
+        layer_name = "Layer 9: Forward Clubbing"
+        
+        # Get all unmatched CIS records
+        unmatched_cis_indices = cis_grouped[~cis_grouped['Matched_Flag']].index.tolist()
+        
+        if not unmatched_cis_indices:
+            match_stats[layer_name] = 0
+            return
+        
+        # Get unmatched G2B records
+        g2b_unmatched = g2b_proc[g2b_proc['Matching Status'] == "Unmatched"].copy()
+        
+        if g2b_unmatched.empty:
+            match_stats[layer_name] = 0
+            return
+        
+        # Group G2B by GSTIN for faster lookup
+        g2b_by_gstin = g2b_unmatched.groupby('Norm_GSTIN')
+        
+        # Try to find combinations of CIS invoices that match single G2B invoices
+        for gstin, g2b_group in g2b_by_gstin:
+            # Get unmatched CIS records for this GSTIN
+            cis_for_gstin = cis_grouped[
+                (cis_grouped.index.isin(unmatched_cis_indices)) & 
+                (cis_grouped['Norm_GSTIN'] == gstin)
+            ]
+            
+            if len(cis_for_gstin) < 2:
+                continue  # Need at least 2 CIS records to club
+            
+            # For each G2B record, try to find combination of CIS records
+            for g2b_idx, row_g2b in g2b_group.iterrows():
+                g2b_amount = row_g2b['Grand_Total']
+                g2b_inv = row_g2b['Inv_Basic']
+                
+                # Find CIS records with same invoice base (likely same invoice split in CIS)
+                matching_inv_cis = cis_for_gstin[cis_for_gstin['Inv_Basic'] == g2b_inv]
+                
+                if len(matching_inv_cis) >= 2:
+                    # Check if sum of these CIS records matches G2B amount
+                    total_cis_amount = matching_inv_cis['Grand_Total'].sum()
+                    diff = abs(total_cis_amount - g2b_amount)
+                    
+                    if diff <= tol_std:
+                        # Match found!
+                        cis_indices_list = []
+                        for _, cis_row in matching_inv_cis.iterrows():
+                            cis_indices_list.extend(cis_row['Index CIS'])
+                            cis_grouped.at[cis_row.name, 'Matched_Flag'] = True
+                        
+                        g2b_indices = [row_g2b['INDEX']]
+                        
+                        # Update G2B
+                        g2b_proc.loc[g2b_proc['INDEX'] == row_g2b['INDEX'], 'Matching Status'] = "Matched"
+                        g2b_proc.loc[g2b_proc['INDEX'] == row_g2b['INDEX'], 'CIS Key'] = ", ".join(map(str, cis_indices_list))
+                        
+                        # Update CIS records
+                        detail = f"Matched: GSTIN, Invoice Number | Forward Clubbing: {len(matching_inv_cis)} CIS vs 1 G2B Record (Total Diff: {diff:.2f})"
+                        for cis_id in cis_indices_list:
+                            cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Matching Status'] = "Matched"
+                            cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Match Category'] = layer_name
+                            cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'GSTR 2B Key'] = ", ".join(map(str, g2b_indices))
+                            cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Short Remark'] = "Matched"
+                            cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Detailed Remark'] = detail
+                            
+                            existing = str(cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Comments&Remarks'].values[0])
+                            if existing == 'nan': existing = ""
+                            new_rem = f"{existing} | {layer_name}".strip(" |")
+                            cis_proc.loc[cis_proc['Index CIS'] == cis_id, 'Comments&Remarks'] = new_rem
+                        
+                        count += 1
+                        # Remove from unmatched list
+                        unmatched_cis_indices = [idx for idx in unmatched_cis_indices if idx not in matching_inv_cis.index]
+        
+        match_stats[layer_name] = count
+    
+    if progress_callback:
+        progress_callback(0.83, "Running Layer 9: Forward Clubbing...")
+    run_forward_clubbing()
+
+    # --- LAYER 10: REVERSE CLUBBING ---
     def run_reverse_clubbing():
         count = 0
-        layer_name = "Layer 8: Reverse Clubbing"
+        layer_name = "Layer 10: Reverse Clubbing"
         
         # Group Unmatched G2B
         g2b_unmatched = g2b_proc[g2b_proc['Matching Status'] == "Unmatched"]
@@ -527,7 +642,7 @@ def run_8_layer_reconciliation(cis_df, gstr2b_df, col_map_cis, col_map_g2b, tol_
         match_stats[layer_name] = count
 
     if progress_callback:
-        progress_callback(0.85, "Running Layer 8: Reverse Clubbing...")
+        progress_callback(0.87, "Running Layer 10: Reverse Clubbing...")
     run_reverse_clubbing()
 
     if progress_callback:
@@ -546,7 +661,7 @@ def run_8_layer_reconciliation(cis_df, gstr2b_df, col_map_cis, col_map_g2b, tol_
     cis_proc.loc[mask, 'Short Remark'] = cis_proc.loc[mask, 'Short Remark'].astype(str) + " + Time Barred"
     cis_proc.loc[mask, 'Detailed Remark'] = cis_proc.loc[mask, 'Detailed Remark'].astype(str) + " [Warning: Date < 31 Mar 2024]"
 
-    drop_cols = ['Norm_GSTIN', 'Norm_PAN', 'Inv_Basic', 'Inv_Num', 'Inv_Last4', 'Taxable', 'Tax', 'Grand_Total', 'D_Obj']
+    drop_cols = ['Norm_GSTIN', 'Norm_PAN', 'Inv_Basic', 'Inv_Num', 'Inv_Last4', 'Inv_Stripped', 'Taxable', 'Tax', 'Grand_Total', 'D_Obj']
     cis_final = cis_proc.drop(columns=[c for c in drop_cols if c in cis_proc.columns])
     g2b_final = g2b_proc.drop(columns=[c for c in drop_cols if c in g2b_proc.columns])
 
@@ -576,11 +691,13 @@ with st.sidebar:
         ("1️⃣", "Strict Match", "Exact invoice + exact amounts"),
         ("2️⃣", "Grand Total", "Exact invoice + total amount"),
         ("3️⃣", "High Tolerance", "With higher tolerance"),
-        ("4️⃣", "Numeric Only", "Strips letters from invoice"),
-        ("5️⃣", "Last 4 Digits", "Matches last 4 digits"),
-        ("6️⃣", "PAN Level", "Head office matching"),
-        ("7️⃣", "Fuzzy Match", "Handles typos"),
-        ("8️⃣", "Reverse Club", "1 CIS vs many G2B")
+        ("4️⃣", "Stripped Pattern", "Removes prefixes/suffixes"),
+        ("5️⃣", "Numeric Only", "Strips letters from invoice"),
+        ("6️⃣", "Last 4 Digits", "Matches last 4 digits"),
+        ("7️⃣", "PAN Level", "Head office matching"),
+        ("8️⃣", "Fuzzy Match", "Handles typos"),
+        ("9️⃣", "Forward Club", "Many CIS vs 1 G2B"),
+        ("🔟", "Reverse Club", "1 CIS vs many G2B")
     ]
     
     for emoji, name, desc in layers_info:
@@ -595,7 +712,7 @@ with st.sidebar:
 st.markdown("""
 <div class='info-box'>
     <h4>🚀 Smart GST Reconciliation</h4>
-    <p>Upload your CIS and GSTR-2B files to automatically match and reconcile invoices using our 8-layer intelligent algorithm.</p>
+    <p>Upload your CIS and GSTR-2B files to automatically match and reconcile invoices using our 10-layer intelligent algorithm.</p>
 </div>
 """, unsafe_allow_html=True)
 
