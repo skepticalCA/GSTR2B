@@ -688,7 +688,7 @@ with st.sidebar:
     
     st.markdown("### 🎯 Algorithm Layers")
     layers_info = [
-        ("1️⃣", "Strict Match", "Exact invoice + exact amounts"),
+        ("1️⃣", "Strict Match", "GSTIN + Exact Invoice + Exact Taxable + Exact Tax"),
         ("2️⃣", "Grand Total", "Exact invoice + total amount"),
         ("3️⃣", "High Tolerance", "With higher tolerance"),
         ("4️⃣", "Stripped Pattern", "Removes prefixes/suffixes"),
