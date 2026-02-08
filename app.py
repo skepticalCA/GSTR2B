@@ -18,7 +18,7 @@ except ImportError:
 # PAGE CONFIG & CUSTOM CSS
 # ==========================================
 st.set_page_config(
-    page_title="GST Reconciliation Tool",
+    page_title="GST Reconciliation",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -30,22 +30,15 @@ st.markdown("""
     .main {
         padding-top: 0rem;
     }
-    .block-container {
-        padding-top: 1rem;
-        padding-bottom: 0rem;
-    }
-    div[data-testid="stToolbar"] {
-        display: none;
-    }
     .stButton>button {
         width: 100%;
         background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
         color: white;
         font-weight: 600;
         border: none;
-        padding: 0.75rem;
-        border-radius: 8px;
-        font-size: 1.1rem;
+        padding: 0rem;
+        border-radius: 6px;
+        font-size: 0rem;
     }
     .stButton>button:hover {
         background: linear-gradient(90deg, #764ba2 0%, #667eea 100%);
@@ -53,8 +46,8 @@ st.markdown("""
     }
     .metric-card {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 1.5rem;
-        border-radius: 10px;
+        padding: 0rem;
+        border-radius: 7px;
         color: white;
         text-align: center;
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
@@ -93,8 +86,6 @@ st.markdown("""
     h1 {
         color: #667eea;
         font-weight: 700;
-        margin-top: 0;
-        padding-top: 0;
     }
     .stProgress > div > div > div {
         background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
@@ -105,8 +96,10 @@ st.markdown("""
 # ==========================================
 # HEADER
 # ==========================================
-st.title("📊 GST Reconciliation Tool")
-st.markdown("**10-Layer Intelligent Matching Algorithm**")
+col1, col2, col3 = st.columns([1, 2, 1])
+with col2:
+    st.title("📊 GST Reconciliation")
+    st.markdown("**10-Layer GST Matching Tool**")
 
 st.divider()
 
@@ -182,169 +175,6 @@ def load_gstr2b_with_stitching(file_obj, sheet_name, progress_callback=None):
         progress_callback(0.3, "GSTR-2B loaded successfully")
         
     return df_final
-
-def load_and_merge_b2b_b2ba(file_obj, progress_callback=None):
-    """
-    Loads B2B and B2BA sheets from GSTR-2B and merges them intelligently.
-    B2BA contains amendments with duplicate column headers - we extract the amended values.
-    """
-    if progress_callback:
-        progress_callback(0.1, "Loading GSTR-2B sheets...")
-    
-    xl = pd.ExcelFile(file_obj)
-    sheet_names = [s.strip().upper() for s in xl.sheet_names]
-    
-    # Find B2B and B2BA sheets
-    b2b_sheet = None
-    b2ba_sheet = None
-    
-    for original_name, upper_name in zip(xl.sheet_names, sheet_names):
-        if upper_name == 'B2B':
-            b2b_sheet = original_name
-        elif upper_name == 'B2BA':
-            b2ba_sheet = original_name
-    
-    if not b2b_sheet:
-        # Fallback to first sheet if B2B not found
-        if progress_callback:
-            progress_callback(0.15, "B2B sheet not found, using first sheet...")
-        return load_gstr2b_with_stitching(file_obj, xl.sheet_names[0], progress_callback)
-    
-    # Load B2B sheet
-    if progress_callback:
-        progress_callback(0.15, "Loading B2B sheet...")
-    file_obj.seek(0)
-    df_b2b = load_gstr2b_with_stitching(file_obj, b2b_sheet, None)
-    df_b2b['Source_Sheet'] = 'B2B'
-    
-    # Load B2BA sheet if exists
-    if b2ba_sheet:
-        if progress_callback:
-            progress_callback(0.25, "Loading B2BA (Amendments) sheet...")
-        
-        file_obj.seek(0)
-        
-        # B2BA has duplicate columns - need special handling
-        # Read raw data first to handle duplicate columns
-        df_b2ba_raw = pd.read_excel(file_obj, sheet_name=b2ba_sheet)
-        
-        # Get column names
-        cols = df_b2ba_raw.columns.tolist()
-        
-        # B2BA Structure: Month, Original Invoice Details, GSTIN, Trade Name, AMENDED Invoice Details...
-        # We need to identify where amended invoice details start
-        
-        # Find the second occurrence of key columns
-        invoice_num_indices = [i for i, col in enumerate(cols) if 'invoice number' in str(col).lower()]
-        invoice_date_indices = [i for i, col in enumerate(cols) if 'invoice date' in str(col).lower()]
-        invoice_type_indices = [i for i, col in enumerate(cols) if 'invoice type' in str(col).lower()]
-        
-        if len(invoice_num_indices) >= 2 and len(invoice_date_indices) >= 2:
-            # B2BA has the amended details starting from second occurrence
-            # Structure is typically: Month, Old Invoice No, Old Date, GSTIN, Name, NEW Invoice No, NEW Invoice Type, NEW Date, NEW Values...
-            
-            # Create mapping for key columns (use the SECOND/AMENDED occurrence)
-            gstin_idx = None
-            trade_name_idx = None
-            
-            for i, col in enumerate(cols):
-                if 'gstin' in str(col).lower() and 'supplier' in str(col).lower():
-                    gstin_idx = i
-                if 'trade' in str(col).lower() or 'legal name' in str(col).lower():
-                    trade_name_idx = i
-            
-            # Build a new dataframe with proper column mapping for B2BA
-            # We want: GSTIN, Trade Name, Amended Invoice No, Amended Type, Amended Date, Amended Values...
-            
-            b2ba_data = []
-            for idx, row in df_b2ba_raw.iterrows():
-                new_row = {}
-                
-                # Map columns from B2BA to B2B structure
-                if gstin_idx is not None:
-                    new_row['GSTIN of supplier'] = row.iloc[gstin_idx]
-                
-                if trade_name_idx is not None:
-                    new_row['Trade/Legal name'] = row.iloc[trade_name_idx]
-                
-                # Use SECOND occurrence of invoice number (amended)
-                if len(invoice_num_indices) >= 2:
-                    new_row['Invoice number'] = row.iloc[invoice_num_indices[1]]
-                
-                # Use SECOND occurrence of invoice type (amended)
-                if len(invoice_type_indices) >= 2:
-                    new_row['Invoice type'] = row.iloc[invoice_type_indices[1]]
-                
-                # Use SECOND occurrence of invoice date (amended)
-                if len(invoice_date_indices) >= 2:
-                    new_row['Invoice Date'] = row.iloc[invoice_date_indices[1]]
-                
-                # Map other important columns (these typically come after the amended invoice details)
-                for i, col in enumerate(cols):
-                    col_lower = str(col).lower()
-                    
-                    # Skip if it's the first (original) occurrence of duplicate columns
-                    if 'invoice value' in col_lower and i > invoice_num_indices[1]:
-                        new_row['Invoice Value(₹)'] = row.iloc[i]
-                    elif 'place of supply' in col_lower and i > invoice_num_indices[1]:
-                        new_row['Place of supply'] = row.iloc[i]
-                    elif 'reverse charge' in col_lower and i > invoice_num_indices[1]:
-                        new_row['Supply Attract Reverse Charge'] = row.iloc[i]
-                    elif 'taxable value' in col_lower and i > invoice_num_indices[1]:
-                        new_row['Taxable Value (₹)'] = row.iloc[i]
-                    elif 'integrated tax' in col_lower and i > invoice_num_indices[1] and 'Integrated Tax(₹)' not in new_row:
-                        new_row['Integrated Tax(₹)'] = row.iloc[i]
-                    elif 'central tax' in col_lower and i > invoice_num_indices[1] and 'Central Tax(₹)' not in new_row:
-                        new_row['Central Tax(₹)'] = row.iloc[i]
-                    elif 'state' in col_lower and 'tax' in col_lower and i > invoice_num_indices[1] and 'State/UT Tax(₹)' not in new_row:
-                        new_row['State/UT Tax(₹)'] = row.iloc[i]
-                    elif 'cess' in col_lower and i > invoice_num_indices[1] and 'Cess(₹)' not in new_row:
-                        new_row['Cess(₹)'] = row.iloc[i]
-                    elif 'gstr-1' in col_lower and 'period' in col_lower:
-                        new_row['GSTR-1/IFF/GSTR-5 Period'] = row.iloc[i]
-                    elif 'gstr-1' in col_lower and 'filing' in col_lower:
-                        new_row['GSTR-1/IFF/GSTR-5 Filing Date'] = row.iloc[i]
-                    elif 'itc availability' in col_lower:
-                        new_row['ITC Availability'] = row.iloc[i]
-                    elif 'applicable' in col_lower and 'tax rate' in col_lower:
-                        new_row['Applicable % of Tax Rate'] = row.iloc[i]
-                
-                b2ba_data.append(new_row)
-            
-            df_b2ba = pd.DataFrame(b2ba_data)
-            df_b2ba['Source_Sheet'] = 'B2BA'
-        else:
-            # Fallback: If structure is different, use as-is
-            df_b2ba = df_b2ba_raw
-            df_b2ba['Source_Sheet'] = 'B2BA'
-        
-        if progress_callback:
-            progress_callback(0.28, f"Merging B2B ({len(df_b2b)} rows) and B2BA ({len(df_b2ba)} rows)...")
-        
-        # Merge logic: Combine both sheets
-        # Ensure both dataframes have same columns (fill missing with empty columns)
-        all_columns = list(set(df_b2b.columns) | set(df_b2ba.columns))
-        for col in all_columns:
-            if col not in df_b2b.columns:
-                df_b2b[col] = ""
-            if col not in df_b2ba.columns:
-                df_b2ba[col] = ""
-        
-        # Reorder columns to match
-        df_b2b = df_b2b[all_columns]
-        df_b2ba = df_b2ba[all_columns]
-        
-        # Concatenate both sheets
-        df_merged = pd.concat([df_b2b, df_b2ba], ignore_index=True)
-        
-        if progress_callback:
-            progress_callback(0.3, f"Merged successfully: {len(df_merged)} total rows")
-        
-        return df_merged
-    else:
-        if progress_callback:
-            progress_callback(0.3, "B2BA sheet not found, using only B2B data")
-        return df_b2b
 
 # ==========================================
 # HELPER FUNCTIONS & NORMALIZERS
@@ -858,10 +688,10 @@ with st.sidebar:
     
     st.markdown("### 🎯 Algorithm Layers")
     layers_info = [
-        ("1️⃣", "Strict Match", "Exact invoice + exact amounts"),
-        ("2️⃣", "Grand Total", "Exact invoice + total amount"),
-        ("3️⃣", "High Tolerance", "With higher tolerance"),
-        ("4️⃣", "Stripped Pattern", "Removes prefixes/suffixes"),
+        ("1️⃣", "Strict Match", "GSTIN + Exact Invoice + Exact Taxable + Exact Tax"),
+        ("2️⃣", "Grand Total", "GSTIN + Exact Invoice + Grand Total (Taxable + Tax)"),
+        ("3️⃣", "High Tolerance", "GSTIN + Exact Invoice + Grand Total"),
+        ("4️⃣", "Stripped Pattern", "Removes prefixes/suffixe"),
         ("5️⃣", "Numeric Only", "Strips letters from invoice"),
         ("6️⃣", "Last 4 Digits", "Matches last 4 digits"),
         ("7️⃣", "PAN Level", "Head office matching"),
@@ -877,14 +707,6 @@ with st.sidebar:
             <small style='color: #666;'>{desc}</small>
         </div>
         """, unsafe_allow_html=True)
-
-# Main content
-st.markdown("""
-<div class='info-box'>
-    <h4>🚀 Smart GST Reconciliation</h4>
-    <p>Upload your CIS and GSTR-2B files to automatically match and reconcile invoices using our 10-layer intelligent algorithm.</p>
-</div>
-""", unsafe_allow_html=True)
 
 # File upload section
 col1, col2 = st.columns(2)
@@ -906,7 +728,7 @@ st.divider()
 st.markdown("#### ⚙️ Matching Parameters")
 col1, col2, col3 = st.columns([1, 1, 1])
 with col1:
-    tol_std = st.number_input("Standard Tolerance (₹)", value=2.0, min_value=0.0, step=0.5, help="Tolerance for most matching layers")
+    tol_std = st.number_input("Standard Tolerance (₹)", value=10.0, min_value=0.0, step=0.5, help="Tolerance for most matching layers")
 with col2:
     tol_high = st.number_input("High Tolerance (₹)", value=50.0, min_value=0.0, step=5.0, help="Higher tolerance for Layer 3")
 with col3:
@@ -935,20 +757,14 @@ if st.button("🚀 Start Reconciliation Process", type="primary", use_container_
             df_cis = pd.read_excel(cis_file)
             df_cis = df_cis.loc[:, ~df_cis.columns.duplicated()]
             
-            update_progress(0.15, "📂 Loading GSTR-2B file (B2B + B2BA)...")
-            df_g2b = load_and_merge_b2b_b2ba(g2b_file, progress_callback=update_progress)
+            update_progress(0.15, "📂 Loading GSTR-2B file...")
+            xl = pd.ExcelFile(g2b_file)
+            df_g2b = load_gstr2b_with_stitching(
+                g2b_file, 
+                'B2B' if 'B2B' in xl.sheet_names else xl.sheet_names[0],
+                progress_callback=update_progress
+            )
             df_g2b = df_g2b.loc[:, ~df_g2b.columns.duplicated()]
-            
-            # Show source sheet breakdown
-            if 'Source_Sheet' in df_g2b.columns:
-                b2b_count = (df_g2b['Source_Sheet'] == 'B2B').sum()
-                b2ba_count = (df_g2b['Source_Sheet'] == 'B2BA').sum()
-                if b2ba_count > 0:
-                    st.info(f"📊 **GSTR-2B Data Loaded:** {b2b_count:,} records from B2B sheet + {b2ba_count:,} records from B2BA (Amendments) sheet = **{len(df_g2b):,} total records**")
-                else:
-                    st.info(f"📊 **GSTR-2B Data Loaded:** {len(df_g2b):,} records from B2B sheet (B2BA sheet not found)")
-            else:
-                st.info(f"📊 **GSTR-2B Data Loaded:** {len(df_g2b):,} records")
 
             # Map columns
             cis_map = {
@@ -1021,17 +837,6 @@ if st.button("🚀 Start Reconciliation Process", type="primary", use_container_
             total_unmatched = total_cis - total_matched
             match_rate = (total_matched / total_cis * 100) if total_cis > 0 else 0
             
-            # GSTR-2B source breakdown
-            if 'Source_Sheet' in g2b_res.columns:
-                total_g2b = len(g2b_res)
-                g2b_b2b = (g2b_res['Source_Sheet'] == 'B2B').sum()
-                g2b_b2ba = (g2b_res['Source_Sheet'] == 'B2BA').sum()
-                
-                # Matched breakdown by source
-                g2b_matched = g2b_res[g2b_res['Matching Status'] == 'Matched']
-                matched_b2b = (g2b_matched['Source_Sheet'] == 'B2B').sum()
-                matched_b2ba = (g2b_matched['Source_Sheet'] == 'B2BA').sum()
-            
             # Display metrics
             col1, col2, col3, col4 = st.columns(4)
             
@@ -1068,44 +873,6 @@ if st.button("🚀 Start Reconciliation Process", type="primary", use_container_
                 """, unsafe_allow_html=True)
             
             st.markdown("<br>", unsafe_allow_html=True)
-            
-            # Show GSTR-2B source breakdown if available
-            if 'Source_Sheet' in g2b_res.columns and g2b_b2ba > 0:
-                st.markdown("#### 📋 GSTR-2B Source Breakdown")
-                
-                col_a, col_b, col_c, col_d = st.columns(4)
-                
-                with col_a:
-                    st.markdown(f"""
-                    <div style='background: #e8f4f8; padding: 1rem; border-radius: 8px; border-left: 4px solid #17a2b8;'>
-                        <div style='font-size: 0.9rem; color: #666;'>B2B Records</div>
-                        <div style='font-size: 1.8rem; font-weight: bold; color: #17a2b8;'>{g2b_b2b:,}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                with col_b:
-                    st.markdown(f"""
-                    <div style='background: #fff3cd; padding: 1rem; border-radius: 8px; border-left: 4px solid #ffc107;'>
-                        <div style='font-size: 0.9rem; color: #666;'>B2BA (Amendments)</div>
-                        <div style='font-size: 1.8rem; font-weight: bold; color: #e0a800;'>{g2b_b2ba:,}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                with col_c:
-                    st.markdown(f"""
-                    <div style='background: #d1f2eb; padding: 1rem; border-radius: 8px; border-left: 4px solid #28a745;'>
-                        <div style='font-size: 0.9rem; color: #666;'>Matched B2B</div>
-                        <div style='font-size: 1.8rem; font-weight: bold; color: #28a745;'>{matched_b2b:,}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                with col_d:
-                    st.markdown(f"""
-                    <div style='background: #d1f2eb; padding: 1rem; border-radius: 8px; border-left: 4px solid #28a745;'>
-                        <div style='font-size: 0.9rem; color: #666;'>Matched B2BA</div>
-                        <div style='font-size: 1.8rem; font-weight: bold; color: #28a745;'>{matched_b2ba:,}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
             
             # Layer-wise breakdown
             st.markdown("### 📈 Layer-wise Breakdown")
@@ -1164,8 +931,8 @@ if st.button("🚀 Start Reconciliation Process", type="primary", use_container_
 # Footer
 st.divider()
 st.markdown("""
-<div style='text-align: center; color: #666; padding: 2rem;'>
-    <p>Built with ❤️ using Streamlit | GST Reconciliation Tool v2.0</p>
-    <p><small>For support, contact your IT department</small></p>
+<div style='text-align: center; color: #666; padding: 0rem;'>
+    <p>GST Reconciliation Tool v1.0</p>
+    <p><small>For support, contact arvind.mehta@nlcindia.in</small></p>
 </div>
 """, unsafe_allow_html=True)
