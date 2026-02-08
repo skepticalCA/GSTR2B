@@ -325,9 +325,17 @@ st.set_page_config(page_title="GST 10-Layer Reconciliation", layout="wide")
 st.title("📊 10-Layer Auto-Reconciliation Tool")
 
 st.markdown("""
-**New Layers:**
-* **Layer 9 (Unique Amount):** Matches unique amounts when Invoice No fails.
-* **Layer 10 (OCR Fix):** Fixes `O` vs `0`, `S` vs `5`, `I` vs `1`.
+**Algorithm Layers:**
+1.  **Strict:** Exact Match (Inv + Taxable + Tax).
+2.  **Grand Total:** Exact Match (Inv + Grand Total).
+3.  **High Tolerance:** Exact Match (Inv + Grand Total within Tol).
+4.  **Numeric Only:** Strips letters (`GST/01` -> `01`).
+5.  **Last 4 Digits:** Matches last 4 digits (`WB-0995` -> `0995`).
+6.  **PAN Level:** Matches Head Office PAN (Ignores GSTIN suffix).
+7.  **Fuzzy:** Matches typos (`9855` vs `9885`).
+8.  **Reverse Clubbing:** 1 CIS Entry vs Many G2B Entries.
+9.  **Unique Amount:** Matches unique amounts when Invoice No fails.
+10. **Layer 10 (OCR Fix):** Fixes `O` vs `0`, `S` vs `5`, `I` vs `1`.
 """)
 
 col1, col2 = st.columns(2)
