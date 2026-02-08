@@ -708,14 +708,6 @@ with st.sidebar:
         </div>
         """, unsafe_allow_html=True)
 
-# Main content
-st.markdown("""
-<div class='info-box'>
-    <h4>🚀 Smart GST Reconciliation</h4>
-    <p>Upload CIS and GSTR-2B files to automatically match and reconcile invoices using 10-layer intelligent algorithm.</p>
-</div>
-""", unsafe_allow_html=True)
-
 # File upload section
 col1, col2 = st.columns(2)
 with col1:
