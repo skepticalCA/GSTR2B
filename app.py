@@ -28,7 +28,7 @@ st.set_page_config(
 st.markdown("""
     <style>
     .main {
-        padding-top: 2rem;
+        padding-top: 0rem;
     }
     .stButton>button {
         width: 100%;
@@ -939,7 +939,7 @@ if st.button("🚀 Start Reconciliation Process", type="primary", use_container_
 # Footer
 st.divider()
 st.markdown("""
-<div style='text-align: center; color: #666; padding: 2rem;'>
+<div style='text-align: center; color: #666; padding: 0rem;'>
     <p>GST Reconciliation Tool v1.0</p>
     <p><small>For support, contact arvind.mehta@nlcindia.in</small></p>
 </div>
