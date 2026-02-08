@@ -36,9 +36,9 @@ st.markdown("""
         color: white;
         font-weight: 600;
         border: none;
-        padding: 0.75rem;
-        border-radius: 8px;
-        font-size: 1.1rem;
+        padding: 0rem;
+        border-radius: 6px;
+        font-size: 0rem;
     }
     .stButton>button:hover {
         background: linear-gradient(90deg, #764ba2 0%, #667eea 100%);
@@ -47,7 +47,7 @@ st.markdown("""
     .metric-card {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         padding: 0rem;
-        border-radius: 10px;
+        border-radius: 7px;
         color: white;
         text-align: center;
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
