@@ -18,7 +18,7 @@ except ImportError:
 # PAGE CONFIG & CUSTOM CSS
 # ==========================================
 st.set_page_config(
-    page_title="GST Reconciliation Tool",
+    page_title="GST Reconciliation",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -98,7 +98,7 @@ st.markdown("""
 # ==========================================
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
-    st.title("📊 GST Reconciliation Tool")
+    st.title("📊 GST Reconciliation")
     st.markdown("**10-Layer Intelligent Matching Algorithm**")
 
 st.divider()
@@ -736,7 +736,7 @@ st.divider()
 st.markdown("#### ⚙️ Matching Parameters")
 col1, col2, col3 = st.columns([1, 1, 1])
 with col1:
-    tol_std = st.number_input("Standard Tolerance (₹)", value=2.0, min_value=0.0, step=0.5, help="Tolerance for most matching layers")
+    tol_std = st.number_input("Standard Tolerance (₹)", value=10.0, min_value=0.0, step=0.5, help="Tolerance for most matching layers")
 with col2:
     tol_high = st.number_input("High Tolerance (₹)", value=50.0, min_value=0.0, step=5.0, help="Higher tolerance for Layer 3")
 with col3:
