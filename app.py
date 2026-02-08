@@ -99,7 +99,7 @@ st.markdown("""
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     st.title("📊 GST Reconciliation")
-    st.markdown("**10-Layer Intelligent Matching Algorithm**")
+    st.markdown("**10-Layer GST Matching Tool**")
 
 st.divider()
 
