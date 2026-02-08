@@ -712,7 +712,7 @@ with st.sidebar:
 st.markdown("""
 <div class='info-box'>
     <h4>🚀 Smart GST Reconciliation</h4>
-    <p>Upload your CIS and GSTR-2B files to automatically match and reconcile invoices using our 10-layer intelligent algorithm.</p>
+    <p>Upload CIS and GSTR-2B files to automatically match and reconcile invoices using 10-layer intelligent algorithm.</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -940,7 +940,7 @@ if st.button("🚀 Start Reconciliation Process", type="primary", use_container_
 st.divider()
 st.markdown("""
 <div style='text-align: center; color: #666; padding: 2rem;'>
-    <p>Built with ❤️ using Streamlit | GST Reconciliation Tool v2.0</p>
-    <p><small>For support, contact your IT department</small></p>
+    <p>GST Reconciliation Tool v1.0</p>
+    <p><small>For support, contact arvind.mehta@nlcindia.in</small></p>
 </div>
 """, unsafe_allow_html=True)
