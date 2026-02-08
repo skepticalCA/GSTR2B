@@ -18,7 +18,7 @@ except ImportError:
 # PAGE CONFIG & CUSTOM CSS
 # ==========================================
 st.set_page_config(
-    page_title="GST Reconciliation",
+    page_title="GST Reconciliation Tool",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -30,15 +30,22 @@ st.markdown("""
     .main {
         padding-top: 0rem;
     }
+    .block-container {
+        padding-top: 1rem;
+        padding-bottom: 0rem;
+    }
+    div[data-testid="stToolbar"] {
+        display: none;
+    }
     .stButton>button {
         width: 100%;
         background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
         color: white;
         font-weight: 600;
         border: none;
-        padding: 0rem;
-        border-radius: 6px;
-        font-size: 0rem;
+        padding: 0.75rem;
+        border-radius: 8px;
+        font-size: 1.1rem;
     }
     .stButton>button:hover {
         background: linear-gradient(90deg, #764ba2 0%, #667eea 100%);
@@ -46,8 +53,8 @@ st.markdown("""
     }
     .metric-card {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 0rem;
-        border-radius: 7px;
+        padding: 1.5rem;
+        border-radius: 10px;
         color: white;
         text-align: center;
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
@@ -86,6 +93,8 @@ st.markdown("""
     h1 {
         color: #667eea;
         font-weight: 700;
+        margin-top: 0;
+        padding-top: 0;
     }
     .stProgress > div > div > div {
         background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
@@ -96,10 +105,8 @@ st.markdown("""
 # ==========================================
 # HEADER
 # ==========================================
-col1, col2, col3 = st.columns([1, 2, 1])
-with col2:
-    st.title("📊 GST Reconciliation")
-    st.markdown("**10-Layer GST Matching Tool**")
+st.title("📊 GST Reconciliation Tool")
+st.markdown("**10-Layer Intelligent Matching Algorithm**")
 
 st.divider()
 
@@ -688,10 +695,10 @@ with st.sidebar:
     
     st.markdown("### 🎯 Algorithm Layers")
     layers_info = [
-        ("1️⃣", "Strict Match", "GSTIN + Exact Invoice + Exact Taxable + Exact Tax"),
-        ("2️⃣", "Grand Total", "GSTIN + Exact Invoice + Grand Total (Taxable + Tax)"),
-        ("3️⃣", "High Tolerance", "GSTIN + Exact Invoice + Grand Total"),
-        ("4️⃣", "Stripped Pattern", "Removes prefixes/suffixe"),
+        ("1️⃣", "Strict Match", "Exact invoice + exact amounts"),
+        ("2️⃣", "Grand Total", "Exact invoice + total amount"),
+        ("3️⃣", "High Tolerance", "With higher tolerance"),
+        ("4️⃣", "Stripped Pattern", "Removes prefixes/suffixes"),
         ("5️⃣", "Numeric Only", "Strips letters from invoice"),
         ("6️⃣", "Last 4 Digits", "Matches last 4 digits"),
         ("7️⃣", "PAN Level", "Head office matching"),
@@ -707,6 +714,14 @@ with st.sidebar:
             <small style='color: #666;'>{desc}</small>
         </div>
         """, unsafe_allow_html=True)
+
+# Main content
+st.markdown("""
+<div class='info-box'>
+    <h4>🚀 Smart GST Reconciliation</h4>
+    <p>Upload your CIS and GSTR-2B files to automatically match and reconcile invoices using our 10-layer intelligent algorithm.</p>
+</div>
+""", unsafe_allow_html=True)
 
 # File upload section
 col1, col2 = st.columns(2)
@@ -728,7 +743,7 @@ st.divider()
 st.markdown("#### ⚙️ Matching Parameters")
 col1, col2, col3 = st.columns([1, 1, 1])
 with col1:
-    tol_std = st.number_input("Standard Tolerance (₹)", value=10.0, min_value=0.0, step=0.5, help="Tolerance for most matching layers")
+    tol_std = st.number_input("Standard Tolerance (₹)", value=2.0, min_value=0.0, step=0.5, help="Tolerance for most matching layers")
 with col2:
     tol_high = st.number_input("High Tolerance (₹)", value=50.0, min_value=0.0, step=5.0, help="Higher tolerance for Layer 3")
 with col3:
@@ -931,8 +946,8 @@ if st.button("🚀 Start Reconciliation Process", type="primary", use_container_
 # Footer
 st.divider()
 st.markdown("""
-<div style='text-align: center; color: #666; padding: 0rem;'>
-    <p>GST Reconciliation Tool v1.0</p>
-    <p><small>For support, contact arvind.mehta@nlcindia.in</small></p>
+<div style='text-align: center; color: #666; padding: 2rem;'>
+    <p>Built with ❤️ using Streamlit | GST Reconciliation Tool v2.0</p>
+    <p><small>For support, contact your IT department</small></p>
 </div>
 """, unsafe_allow_html=True)
